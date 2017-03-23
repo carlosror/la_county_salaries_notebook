@@ -79,7 +79,7 @@ summary(la_salaries)
 ```
 <br>
 
-##### 1.3.1 Errors in departments' names
+##### 1.2.3 Errors in departments' names
 Taking a look at the departments
 ```{r}
 departments <- unique(la_salaries$Department) %>% sort()
@@ -329,9 +329,9 @@ base_plot + geom_boxplot(aes(x = Department, y = Base_Earnings, fill = Departmen
 
 ### References
 
-1. L.A. County. (2017). ***LA County Employee Salaries*** [CSV]. Retrived from https://data.lacounty.gov/Operations/LA-County-Employee-Salaries/8rdv-6nb6
+1. L.A. County. (2017). ***LA County Employee Salaries*** [CSV]. Retrieved from https://data.lacounty.gov/Operations/LA-County-Employee-Salaries/8rdv-6nb6
 
-2. ScreechOwl and Ulrich, J. ***How to rename a single column in a data.frame?*** Retrived from http://stackoverflow.com/questions/7531868/how-to-rename-a-single-column-in-a-data-frame
+2. ScreechOwl and Ulrich, J. ***How to rename a single column in a data.frame?*** Retrieved from http://stackoverflow.com/questions/7531868/how-to-rename-a-single-column-in-a-data-frame
 
 3. Schwartz, M. ***[R] Background color in plots.*** Retrieved from https://stat.ethz.ch/pipermail/r-help/2003-May/033971.html
 
