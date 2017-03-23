@@ -1,0 +1,340 @@
+---
+title: "L.A. County Employee Salaries"
+output: html_notebook
+---
+
+### 1.0 Introduction
+We would like to generate some visualizations for an [L.A. County employee salaries](https://data.lacounty.gov/Operations/LA-County-Employee-Salaries/8rdv-6nb6) dataset that includes county employees' salaries and benefits for the years 2013-2015. The dataset consists of a little over 300,000 records. We will mainly focus on the most recent data, from 2015.
+
+Start by loading R required libraries we will be using
+```{r}
+library(magrittr) # pipe operator %>%
+library(ggplot2) # plots
+library(rbokeh) # plots
+library(readr) # read data frame quickly
+library(d3heatmap) # heat maps
+```
+<br>
+
+#### 1.1 Loading the data
+```{r, message=FALSE, warning=FALSE}
+la_salaries <- read_csv("LA_County_Employee_Salaries.csv")
+#str(salaries)
+#for (colname in colnames(salaries)) {str(salaries[colname])}
+colnames(la_salaries)
+dataset_size <- dim(la_salaries)
+cat("\nNumber of observations:", dataset_size[1], "\nNumber of variables:", dataset_size[2])
+```
+<br>
+
+#### 1.2 Data munging
+
+##### 1.2.1 Removing unused columns and renaming others
+
+Removing some columns we will not use, such as first and last names. Also, the "index", and "ID" and "position type" all came in empty. In addition, we will replace the spaces, " ", in the column names with underscore, "_".
+```{r}
+# Removing
+to_be_removed <- c("Employee Last Name", "Employee First Name", "Middle Initial",
+                   "index", "ID Number", "position type")
+for (colname in to_be_removed) {la_salaries[colname] <- NULL}
+
+# Renaming using plyr's rename() to replace " " with "_" in the columns' names
+old_names <- c("Base Earnings", "Position Title", "Overtime Earnings", "Other Earnings",
+               "Leave Time Payouts", "Total Earnings", "Retirement Surcharge",
+               "Pension Contributions", "Deferred Contributions", "Other Benefits",
+               "Total Benefits", "Total Compensation", "Employee Name")
+new_names <- gsub(" ", "_", old_names, fixed=T)
+for (idx in 1:length(old_names)) 
+  {names(la_salaries)[names(la_salaries) == old_names[idx]] <- new_names[idx]}
+
+# Doing a couple by hand
+names(la_salaries)[names(la_salaries) == "Medical, Dental, Vision"] <- "Medical_Dental_Vision"
+names(la_salaries)[names(la_salaries) == "LTD Life & Medical Tax"] <- "LTD_Life_Medical_Tax"
+# Removing the "/" from some departments' names
+la_salaries$Department[la_salaries$Department == "Agric Comm/Wts & Measures"] <- "Agric Comm-Wts & Measures"
+la_salaries$Department[la_salaries$Department == "Non-Departmental / Unbudgeted"] <- "Non-Departmental - Unbudgeted"
+```
+<br>
+
+##### 1.2.2 Removing dollar signs
+Removing the dollar sign from the earnings and benefits columns so R can treat them as numbers rather than strings.
+```{r}
+earnings_benefits <- c("Base_Earnings", "Overtime_Earnings", "Other_Earnings", "Leave_Time_Payouts",
+                     "Total_Earnings", "Medical_Dental_Vision", "Retirement_Surcharge",
+                     "Pension_Contributions", "Deferred_Contributions", "LTD_Life_Medical_Tax",
+                     "Other_Benefits", "Total_Benefits", "Total_Compensation")
+for (colname in earnings_benefits) 
+{la_salaries[colname] <- la_salaries[[colname]] %>% substring(first = 2) %>% as.numeric()}
+```
+
+```{r, eval=FALSE, include=FALSE}
+for (colname in earnings_benefits) 
+  {cat("Number of negative values in", colname, la_salaries[[colname]][la_salaries[[colname]] < 0] %>% length(), "\n")}
+```
+
+```{r, eval=FALSE, include=FALSE}
+for (colname in earnings_benefits) 
+  {la_salaries[[colname]][la_salaries[[colname]] < 0] <- NA}
+summary(la_salaries)
+```
+<br>
+
+##### 1.3.1 Errors in departments' names
+Taking a look at the departments
+```{r}
+departments <- unique(la_salaries$Department) %>% sort()
+```
+<br>
+There are about 50 departments. I will not print them all here because it would take a lot of space. I did find out there are two departments with almost identical names: "Chief Information Office"" and "Chief Information Office**r**". One of them has salary data for 2013 and 2014, and the other for 2015.
+```{r}
+la_salaries$Year[la_salaries$Department == "Chief Information Office"] %>% unique()
+la_salaries$Year[la_salaries$Department == "Chief Information Officer"] %>% unique()
+```
+<br>
+
+The sets of the names of the employees are almost identical, too, so I think it's safe to assume that they are the same department
+```{r}
+la_salaries$Employee_Name[la_salaries$Department == "Chief Information Office"] %>% sort() %>% unique()
+la_salaries$Employee_Name[la_salaries$Department == "Chief Information Officer"] %>% sort()
+```
+<br>
+
+Renaming the department name of rows where Department is "Chief Information Officer" to "Chief Information Office".
+```{r}
+la_salaries$Department[la_salaries$Department == "Chief Information Officer"] <- "Chief Information Office"
+```
+<br>
+
+Something similar happens to the "Consumer Affairs" and "Consumer and Business Affairs" departments:
+```{r}
+la_salaries$Year[la_salaries$Department == "Consumer Affairs"] %>% unique()
+la_salaries$Year[la_salaries$Department == "Consumer and Business Affairs"] %>% unique()
+```
+<br>
+
+Rename "Consumer Affairs"" to "Consumer and Business Affairs":
+```{r}
+la_salaries$Department[la_salaries$Department == "Consumer Affairs"] <- "Consumer and Business Affairs"
+```
+<br>
+
+### 2.0 Earnings and benefits by department
+#### 2.1 Earnings by department
+We will create a summary data frame with Departments as rows and median base earnings, total earnings, and total compensation as columns. In other words, each observation consists of a department and a set of descriptive statistics corresponding to that department. We will use salary data for 2015.
+
+```{r, eval=FALSE, include=FALSE}
+# Multiple plot function
+#
+# ggplot objects can be passed in ..., or to plotlist (as a list of ggplot objects)
+# - cols:   Number of columns in layout
+# - layout: A matrix specifying the layout. If present, 'cols' is ignored.
+#
+# If the layout is something like matrix(c(1,2,3,3), nrow=2, byrow=TRUE),
+# then plot 1 will go in the upper left, 2 will go in the upper right, and
+# 3 will go all the way across the bottom.
+#
+multiplot <- function(..., plotlist=NULL, file, cols=1, layout=NULL) {
+  library(grid)
+
+  # Make a list from the ... arguments and plotlist
+  plots <- c(list(...), plotlist)
+
+  numPlots = length(plots)
+
+  # If layout is NULL, then use 'cols' to determine layout
+  if (is.null(layout)) {
+    # Make the panel
+    # ncol: Number of columns of plots
+    # nrow: Number of rows needed, calculated from # of cols
+    layout <- matrix(seq(1, cols * ceiling(numPlots/cols)),
+                    ncol = cols, nrow = ceiling(numPlots/cols))
+  }
+
+ if (numPlots==1) {
+    print(plots[[1]])
+
+  } else {
+    # Set up the page
+    grid.newpage()
+    pushViewport(viewport(layout = grid.layout(nrow(layout), ncol(layout))))
+
+    # Make each plot, in the correct location
+    for (i in 1:numPlots) {
+      # Get the i,j matrix positions of the regions that contain this subplot
+      matchidx <- as.data.frame(which(layout == i, arr.ind = TRUE))
+
+      print(plots[[i]], vp = viewport(layout.pos.row = matchidx$row,
+                                      layout.pos.col = matchidx$col))
+    }
+  }
+}
+```
+
+```{r, eval=FALSE, include=FALSE}
+for (x in 2:2) {
+  max_index <- min(3*x, length(departments))
+  min_index <- max_index - 2
+  department_row <- departments[min_index:max_index]
+  plot_list <- vector("list", 3)
+  list_idx <- 1
+  for (idx in min_index:max_index) {
+    base_plot <- ggplot(la_salaries[la_salaries$Department == departments[idx] & la_salaries$Year == 2015,])
+    dpt_histo <- base_plot + geom_histogram(aes(x=Base_Earnings/1000), binwidth=20, fill = "#56B4E9", colour = "black") + color_fill_scheme + labs(fill=NULL) + xlab("Base earnings (thousands)") + ggtitle(paste("Base earnings for\n", departments[idx]))
+    plot_list[[list_idx]] <- dpt_histo
+    list_idx <- list_idx + 1
+  }
+  multiplot(plotlist=plot_list, cols=3)
+  plot_list
+}
+
+# Base plot
+# base_plot <- ggplot(la_salaries[la_salaries$Department %in% departments[1] & la_salaries$Year == 2015,])
+
+
+# dpt_histo <- base_plot + geom_histogram(aes(x=Base_Earnings), binwidth=5000, fill = "#56B4E9", colour = "black") + color_fill_scheme + labs(fill=NULL) + ylab("Base earnings ($)") + theme(legend.position = "top")
+
+# dpt_histo
+```
+
+
+```{r}
+earnings_func <- function(dpt) {
+  # Function that takes a department name "dpt"" and returns a named vector with the 
+  # median base earnings, total earnings, and total compensation for that department
+  med_earn <- la_salaries_2015$Base_Earnings[la_salaries_2015$Department == dpt] %>% median(na.rm=T)
+  med_ttl_earn <- la_salaries_2015$Total_Earnings[la_salaries_2015$Department == dpt] %>% median(na.rm=T)
+  med_benefits <- la_salaries_2015$Total_Benefits[la_salaries_2015$Department == dpt] %>% median(na.rm=T)
+  med_ttl_comp <- la_salaries_2015$Total_Compensation[la_salaries_2015$Department == dpt] %>% median(na.rm=T)
+  
+  stat_vector <- c(med_earn, med_ttl_earn, med_benefits, med_ttl_comp)
+  names(stat_vector) <- c("MBE", "MTE", "MTB", "MTC")
+  return(stat_vector)
+}
+
+la_salaries_2015 <- la_salaries[la_salaries$Year == 2015,]
+departments <- unique(la_salaries_2015$Department) %>% sort()
+la_salaries_2015_summary <- sapply(departments, earnings_func) %>% t() %>% as.data.frame()
+```
+<br>
+
+```{r, include=FALSE}
+# Writing the medians data frame to csv
+write.csv(la_salaries_2015_summary, "2015_earnings_medians.csv")
+```
+
+```{r, include=FALSE}
+# Writing the 2015 data frame to csv
+write.csv(la_salaries_2015, "2015_salaries.csv")
+```
+
+
+```{r, include=FALSE}
+# Writing individual departments' subsets to csv
+dpt_csv <- function(dpt) {
+  la_salaries_2015_subset <- la_salaries_2015[la_salaries_2015$Department == dpt,]
+  write.csv(la_salaries_2015_subset, file = paste("dpt_csv_", dpt, "_2015_salaries.csv", sep=""))
+}
+sapply(departments, dpt_csv)
+```
+
+
+#### 2.2 Interactive heatmap of median earnings in 2015
+Hover over the map to see median earnings values for a department.
+```{r}
+color_blind_palette <- c("#E69F00", "#56B4E9", "#009E73", "#F0E442", "#0072B2", "#D55E00", "#CC79A7")
+d3heatmap(la_salaries_2015_summary, scale = "column", colors = color_blind_palette, dendrogram = "none", xaxis_font_size = 12, labCol = c("Base earnings", "Total earnings", "Total benefits", "Total comp"), width = 600)
+
+```
+<br>
+
+#### 2.3 Boxplots of departments' median earnings
+We can plot the distribution of the median values of the departments' earnings.
+```{r}
+earnings_categ <- list(la_salaries_2015_summary$MBE, la_salaries_2015_summary$MTE, la_salaries_2015_summary$MTC)
+names(earnings_categ) <- c("Base earnings", "Total earnings", "Total compensation")
+boxplot(earnings_categ, las=1,  pars = list(boxwex = 0.4)) # boxwex sets the width of the box
+# las = 1 sets both axes horizontal
+rect(par("usr")[1], par("usr")[3], par("usr")[2], par("usr")[4], col = 
+"gray90") # trick to change the background of plotting area, make it look ggplot-ish
+grid(col="white", lty=1) #lty = 1 means solid lines for boxes' borders
+# Actually need to plot twice b/c of background coloring trick. Set add = T to "add" this plot to previous one
+boxplot(earnings_categ, col = color_blind_palette[2], add=T, las=1, lty=1, main = "Distributions of departments' earnings medians",  pars = list(boxwex = 0.4)) 
+```
+
+```{r, eval=FALSE, include=FALSE}
+data_vectors <- c(la_salaries_2015_summary$MBE, la_salaries_2015_summary$MTE)
+figure(title = "Distribution of departments' earnings medians") %>% theme_title(text_font_size = "11pt") %>%
+  ly_boxplot(x=c("Base earnings", "Total Earnings"), y=data_vectors, fill_color = "#56B4E9", line_color = "black", fill_alpha=1, width = 0.4) %>% theme_plot(background_fill_color = "#E6E6E6") %>% y_axis(number_formatter = "numeral", num_minor_ticks = 2, label = "Earnings (USD)") %>% x_axis(label="") %>% theme_grid(c("x", "y"), grid_line_color = "white") %>% theme_axis("y", num_minor_ticks = 2, axis_line_color = "white") %>% theme_axis("x",  major_label_text_font_size = "12pt", axis_line_color = "white")  
+```
+<br>
+```{r, eval=FALSE, include=FALSE}
+data_vectors <- c(la_salaries_2015_summary$MBE, la_salaries_2015_summary$MTE, la_salaries_2015_summary$MTC)
+figure(title = "Distribution of departments' earnings medians", width = 600) %>% theme_title(text_font_size = "11pt") %>%
+  ly_boxplot(x=c("Base earnings"), y=la_salaries_2015_summary$MBE, fill_color = "#56B4E9", line_color = "black", fill_alpha=1, width = 0.4) %>% ly_boxplot(x=c("Total earnings"), y=la_salaries_2015_summary$MTE, fill_color = "#56B4E9", line_color = "black", fill_alpha=1, width = 0.4) %>% ly_boxplot(x=c("Total compensation"), y=la_salaries_2015_summary$MTC, fill_color = "#56B4E9", line_color = "black", fill_alpha=1, width = 0.4) %>% theme_plot(background_fill_color = "#E6E6E6") %>% y_axis(number_formatter = "numeral", num_minor_ticks = 2, label = "Earnings (USD)") %>% x_axis(label="") %>% theme_grid(c("x", "y"), grid_line_color = "white") %>% theme_axis("y", num_minor_ticks = 2, axis_line_color = "white") %>% theme_axis("x",  major_label_text_font_size = "12pt", axis_line_color = "white") %>% x_range(dat = c("Base earnings", "Total earnings", "Total compensation"))
+```
+<br>
+
+#### 2.4 Benefits by department
+We will create a summary data frame with Departments as rows and benefits quantities as columns. In other words, each observation consists of a department and a set of descriptive statistics corresponding to that department. We will use salary data for 2015.
+```{r}
+benefits_func <- function(dpt) {
+  # Function that takes a department name "dpt"" and returns a named vector with the 
+  # median benefits for that department
+  med_medical <- la_salaries_2015$Medical_Dental_Vision[la_salaries_2015$Department == dpt] %>% median(na.rm=T)
+  med_pension <- la_salaries_2015$Pension_Contributions[la_salaries_2015$Department == dpt] %>% median(na.rm=T)
+  med_ttl_benef <- la_salaries_2015$Total_Benefits[la_salaries_2015$Department == dpt] %>% median(na.rm=T)
+  
+  stat_vector <- c(med_medical, med_pension, med_ttl_benef)
+  names(stat_vector) <- c("MMed", "MPen", "MTB")
+  return(stat_vector)
+}
+
+la_salaries_2015_summary_benef <- sapply(departments, benefits_func) %>% t() %>% as.data.frame()
+```
+<br>
+```{r, include=FALSE}
+# Writing the benefits medians data frame to csv
+write.csv(la_salaries_2015_summary_benef, "2015_benefits_medians.csv")
+```
+
+
+#### 2.5 Boxplots of departments' median benefits
+We can plot the distribution of the median values of the departments' earnings.
+```{r}
+benefits_categ <- list(la_salaries_2015_summary_benef$MMed, la_salaries_2015_summary_benef$MPen, la_salaries_2015_summary_benef$MTB)
+names(benefits_categ) <- c("Medical", "Pension", "Total benefits")
+boxplot(benefits_categ, las=1,  pars = list(boxwex = 0.4)) # boxwex sets the width of the box
+# las = 1 sets both axes horizontal
+rect(par("usr")[1], par("usr")[3], par("usr")[2], par("usr")[4], col = 
+"gray90") # trick to change the background of plotting area, make it look ggplot-ish
+grid(col="white", lty=1) #lty = 1 means solid lines for boxes' borders
+# Actually need to plot twice b/c of background coloring trick. Set add = T to "add" this plot to previous one
+boxplot(benefits_categ, col = color_blind_palette[2], add=T, las=1, lty=1, main = "Distributions of departments' benefits medians",  pars = list(boxwex = 0.4)) 
+```
+
+```{r, eval=FALSE, include=FALSE}
+la_salaries_2015 <- read.csv("2015_salaries.csv")
+departments <- unique(la_salaries_2015$Department) %>% sort()
+la_salaries_2015_subset <- la_salaries_2015[la_salaries_2015$Department %in% departments[1:4],]
+color_scheme <- scale_colour_manual(values = color_blind_palette)
+color_fill_scheme <- scale_fill_manual(values = color_blind_palette)
+
+# legend position
+legend_position <- theme(legend.position = "top", legend.key = element_rect(fill = "white"))
+
+base_plot <- ggplot(la_salaries_2015_subset)
+base_plot + geom_boxplot(aes(x = Department, y = Base_Earnings, fill = Department), outlier.colour = "red") + legend_position + color_fill_scheme + xlab(NULL) + theme(axis.text.x = element_blank())
+```
+<br>
+
+### References
+
+1. L.A. County. (2017). ***LA County Employee Salaries*** [CSV]. Retrived from https://data.lacounty.gov/Operations/LA-County-Employee-Salaries/8rdv-6nb6
+
+2. ScreechOwl and Ulrich, J. ***How to rename a single column in a data.frame?*** Retrived from http://stackoverflow.com/questions/7531868/how-to-rename-a-single-column-in-a-data-frame
+
+3. Schwartz, M. ***[R] Background color in plots.*** Retrieved from https://stat.ethz.ch/pipermail/r-help/2003-May/033971.html
+
+4. STHDA. ***ggplot2 axis ticks : A guide to customize tick marks and labels*** Retrieved from http://www.sthda.com/english/wiki/ggplot2-axis-ticks-a-guide-to-customize-tick-marks-and-labels
+
+5. ***NBA Scoring (2008)*** Retrieved from https://beta.rstudioconnect.com/jjallaire/htmlwidgets-d3heatmap/htmlwidgets-d3heatmap.html
